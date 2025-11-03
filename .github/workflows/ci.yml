@@ -1,0 +1,67 @@
+name: Update Images
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  matrix:
+    name: Build Matrix
+    runs-on: ubuntu-latest
+    outputs:
+      mainline: ${{ steps.build.outputs.mainline }}
+      rc: ${{ steps.build.outputs.rc }}
+    steps:
+      - name: Build Versions JSON
+        id: build
+        run: |
+          mainline_json="[]"
+          micro_version_json="[]"
+          micro_version_json="$(echo "${micro_version_json}" | jq -c -M '. + [{"revision":"v6.14","architectures":["amd64","arm64","armhf","ppc64el","riscv64","s390x"]}]')"
+          micro_version_json="$(echo "${micro_version_json}" | jq -c -M '. + [{"revision":"v6.14.1","architectures":["amd64","arm64","armhf","ppc64el","riscv64","s390x"]}]')"
+          arch_json="$(echo "${micro_version_json}" | jq -c -M '[.[] | .architectures[]] | unique')"
+          mainline_json="$(echo "${mainline_json}" | jq -c -M '. + [{"version":"v6.14","architectures":'"${arch_json}"',"revisions":'"${micro_version_json}"'}]')"
+
+          rc_json="[]"
+          rc_version_json="[]"
+          rc_version_json="$(echo "${rc_version_json}" | jq -c -M '. + [{"revision":"v6.14-rc1","architectures":["amd64","arm64","ppc64el","riscv64","s390x"]}]')"
+          arch_json="$(echo "${rc_version_json}" | jq -c -M '[.[] | .architectures[]] | unique')"
+          rc_json="$(echo "${rc_json}" | jq -c -M '. + [{"version":"v6.14-rc","architectures":'"${arch_json}"',"revisions":'"${rc_version_json}"'}]')"
+
+          echo "::group::Built JSON(mainline)"
+          echo "${mainline_json}" | jq -M
+          echo "::endgroup::"
+
+          echo "::group::Built JSON(mainline release candidates)"
+          echo "${rc_json}" | jq -M
+          echo "::endgroup::"
+
+          { \
+            echo "mainline=${mainline_json}"; \
+            echo "rc=${rc_json}"; \
+          } | tee -a "${GITHUB_OUTPUT}"
+
+  mainline:
+    name: Mainline versions
+    needs:
+      - matrix
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.matrix.outputs.mainline) }}
+    uses: ./.github/workflows/mainline.yml
+    with:
+      version: ${{ matrix.version }}
+      revisions: ${{ toJSON(matrix.revisions) }}
+    secrets: inherit
